@@ -1,128 +1,94 @@
 """
-Later use the laptop webcam as a simulated Raspberry Pi camera.
-It will send JPEG frames to the distributor through TCP.
-"""
+AEROSAR - Test Webcam Sender (USB Webcam or Fallback)
 
-import cv2
-import socket
-import time
+Uses the 16-byte length-prefixed protocol to send webcam frames to Video Server on TCP 5000.
+"""
 import sys
 import os
+import socket
+import time
+import cv2
 
-# Add parent directory to path so we can import from distributor and config
+# Add parent directory to path to import protocol and config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config import LAPTOP_IP, PI_PORT, JPEG_QUALITY, FRAME_WIDTH, FRAME_HEIGHT, FPS_TARGET
+from protocol import send_packet
+from pi.camera_source import CameraSource
 
-from config import VIDEO_HOST, VIDEO_PORT, SENDER_CONNECT_HOST, JPEG_QUALITY
-from distributor.protocol import pack_header
 
-def main():
-    target_host = SENDER_CONNECT_HOST if VIDEO_HOST == "0.0.0.0" else VIDEO_HOST
-    target_port = VIDEO_PORT
-
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("Error: Could not open webcam.")
+def run():
+    print(f"[TEST SENDER] Initializing camera source for testing...")
+    camera = CameraSource(camera_type="auto", width=FRAME_WIDTH, height=FRAME_HEIGHT, fps=FPS_TARGET)
+    if not camera.open():
+        print("[TEST SENDER] Failed to open any camera source.")
         return
 
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+    frame_interval = 1.0 / max(1, FPS_TARGET)
     frame_id = 1
     sock = None
-    connected = False
-    last_reconnect_time = 0.0
 
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
-
-    print(f"Attempting to connect to distributor at {target_host}:{target_port}")
-    
-    fps_start_time = time.time()
-    fps_frame_count = 0
-    current_fps = 0
-
-    while True:
-        # We must continuously read from webcam to keep preview live
-        # and prevent stale frames from building up in the hardware buffer
-        ret, frame = cap.read()
-        if not ret:
-            print("Error: Failed to capture image from webcam.")
-            break
-
-        # Calculate FPS
-        fps_frame_count += 1
-        elapsed_time = time.time() - fps_start_time
-        if elapsed_time >= 1.0:
-            current_fps = fps_frame_count / elapsed_time
-            fps_frame_count = 0
-            fps_start_time = time.time()
-
-        # Connection logic
-        if not connected:
-            current_time = time.time()
-            if current_time - last_reconnect_time >= 1.0:
-                last_reconnect_time = current_time
-                if sock is not None:
-                    sock.close()
+    try:
+        while True:
+            if sock is None:
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.connect((target_host, target_port))
-                    connected = True
-                    print(f"Successfully connected to the distributor at {target_host}:{target_port}!")
-                except ConnectionRefusedError:
-                    print(f"Connection error: Distributor at {target_host}:{target_port} is not running. Retrying...")
-                    sock = None
-                except Exception as e:
-                    print(f"Connection error: {e}. Retrying...")
-                    sock = None
-
-        # Transmission logic
-        if connected:
-            try:
-                # Encode as JPEG
-                result, encoded_image = cv2.imencode('.jpg', frame, encode_param)
-                if not result:
-                    print("Failed to encode frame as JPEG.")
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    sock.connect((LAPTOP_IP, PI_PORT))
+                    print(f"[TEST SENDER] Connected to video server at {LAPTOP_IP}:{PI_PORT}")
+                except Exception:
+                    if sock:
+                        sock.close()
+                        sock = None
+                    time.sleep(1.0)
                     continue
 
-                payload = encoded_image.tobytes()
-                payload_size = len(payload)
-                timestamp_ns = time.time_ns()
-                height, width, _ = frame.shape
+            try:
+                while True:
+                    loop_start = time.time()
+                    ret, frame = camera.read()
+                    if not ret or frame is None:
+                        time.sleep(0.01)
+                        continue
 
-                # Create and send header
-                header = pack_header(frame_id, timestamp_ns, payload_size, width, height)
-                sock.sendall(header)
-                
-                # Send JPEG payload
-                sock.sendall(payload)
-                
-                frame_id += 1
+                    ret, jpeg = cv2.imencode(".jpg", frame, encode_params)
+                    if not ret:
+                        continue
 
-            except (ConnectionResetError, BrokenPipeError, socket.error) as e:
-                print(f"Connection lost during transmission: {e}. Reconnecting...")
-                connected = False
-                if sock is not None:
-                    sock.close()
+                    jpeg_bytes = jpeg.tobytes()
+                    timestamp = int(time.time() * 1000)
+
+                    send_packet(sock, frame_id, timestamp, jpeg_bytes)
+
+                    if frame_id % 30 == 0:
+                        print(f"[TEST SENDER] Sent frame {frame_id}")
+
+                    frame_id += 1
+
+                    elapsed = time.time() - loop_start
+                    sleep_time = frame_interval - elapsed
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+
+            except (ConnectionError, socket.error):
+                print(f"[TEST SENDER] Disconnected. Reconnecting in 1s...")
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
                     sock = None
+                time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\n[TEST SENDER] Stopped by user.")
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        camera.release()
 
-        # Display preview
-        display_frame = frame.copy()
-        status_text = "Connected" if connected else "Disconnected"
-        status_color = (0, 255, 0) if connected else (0, 0, 255)
-
-        cv2.putText(display_frame, f"Frame ID: {frame_id}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(display_frame, f"FPS: {current_fps:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(display_frame, f"Status: {status_text}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
-
-        cv2.imshow("Test Sender Preview", display_frame)
-
-        # Clean shutdown on 'Q' or 'q'
-        if cv2.waitKey(1) & 0xFF in [ord('q'), ord('Q')]:
-            print("Q pressed. Shutting down sender cleanly...")
-            break
-
-    # Cleanup
-    cap.release()
-    cv2.destroyAllWindows()
-    if sock is not None:
-        sock.close()
 
 if __name__ == "__main__":
-    main()
+    run()

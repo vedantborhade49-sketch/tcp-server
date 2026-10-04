@@ -1,119 +1,179 @@
-# AEROSAR Video Distributor
+# AEROSAR - Simplified Video Transport System
 
-This project is the central Python video distributor module. It receives video frames and routes them to the dashboard and ROS bridge.
-
-## Target Architecture
-
-```text
-Laptop/Webcam test sender
-|
-| TCP
-v
-Central Python Video Distributor
-|
-+------ TCP ------> Existing Python Dashboard
-|
-+------ TCP ------> ROS Video Bridge
-|
-v
-Existing ROS/SLAM
-```
-
-Eventually, the webcam/test sender will be replaced by a Raspberry Pi 5 camera sender.
-
-## Modules
-
-- `distributor/`: Core components (TCP server, protocol format, buffer).
-- `clients/`: Handlers for external systems (Dashboard, ROS).
-- `test/`: Emulators like the webcam test sender.
-
-## How to Install Dependencies
-
-Currently, the sender requires OpenCV.
-Install the dependencies using pip:
-```bash
-pip install -r requirements.txt
-```
-Alternatively, install opencv manually:
-```bash
-pip install opencv-python
-```
-
-## How to Run the Test Sender
-
-For STAGE 3, we have implemented the test sender which uses your laptop webcam to temporarily simulate the Raspberry Pi camera.
-
-**What the sender does:**
-- Opens the local laptop webcam.
-- Displays a live preview of the video with overlay stats (FPS, Connection Status, Frame ID).
-- Encodes the frames into JPEG format.
-- Attempts to connect to the central distributor via TCP (using host and port defined in `config.py`, default `127.0.0.1:8000`).
-- Once connected, continuously transmits the packet header and JPEG payload.
-- Automatically handles connection drops without queuing stale frames.
-
-Run the test sender from the project root with:
-```bash
-python test/test_sender.py
-```
-
-*Note: STAGE 4 is now implemented! See below for the end-to-end testing procedure.*
-
-## Configuration (`config.py`)
-
-All communication ports are fully configurable in `config.py`:
-- `VIDEO_HOST = "0.0.0.0"` / `VIDEO_PORT = 5000` (Camera TCP ingestion)
-- `DASHBOARD_HOST = "127.0.0.1"` / `DASHBOARD_PORT = 6001` (Dashboard TCP stream)
-- `ROS_HOST = "127.0.0.1"` / `ROS_PORT = 6002` (ROS TCP bridge stream)
+A lightweight, robust TCP-based video transmission system designed to transport video frames from a Raspberry Pi Camera to a central Laptop Video Server, which distributes the raw JPEG frames directly to a Dashboard and ROS without re-encoding overhead.
 
 ---
 
-## How to Run the STAGE 5 Three-Side Test
+## Architecture
 
-Ensure your virtual environment (`.venv` or `venv`) is activated in each terminal:
-```powershell
-.\venv\Scripts\Activate.ps1
+```text
+             RASPBERRY PI
+                  │
+             CameraSource (Picamera2 / OpenCV / Fallback)
+                  │
+                 JPEG
+                  │
+                 TCP
+                  │
+                  ▼
+         ┌─────────────────┐
+         │  LAPTOP SERVER  │
+         │                 │
+         │  TCP :5000      │
+         └───────┬─────────┘
+                 │
+          ┌──────┴──────┐
+          │             │
+       TCP :6001     TCP :6002
+          │             │
+          ▼             ▼
+      DASHBOARD        ROS
+      RECEIVER      RECEIVER
+          │             │
+          ▼             ▼
+     Existing CV   Existing SLAM
+       + YOLO
 ```
-
-### SIDE 1: Main Sender + Central Video Distributor
-Run the combined launcher from the project directory:
-```bash
-python run_test.py
-```
-*(From workspace root: `python run_test.py` or `python aerosar_video_distributor/run_test.py`)*
-
-This starts `distributor/server.py` and `test/test_sender.py` concurrently.
-
-### SIDE 2: Dashboard TCP Receiver
-In a second terminal:
-```bash
-python clients/dashboard_client.py
-```
-*(From workspace root: `python aerosar_video_distributor/clients/dashboard_client.py`)*
-
-### SIDE 3: ROS TCP Receiver & Bridge
-In a third terminal:
-```bash
-python clients/ros_client.py
-```
-*(From workspace root: `python aerosar_video_distributor/clients/ros_client.py`)*
 
 ---
 
-## Expected Output & Verification
+## Network Ports
 
-Both receivers receive identical frames and print matching Frame IDs:
+| Component | Port | Description |
+|---|---|---|
+| **Pi Video Input** | `5000` | Accepts 1 connection from Raspberry Pi sender |
+| **Dashboard Output** | `6001` | Forwards original JPEG frames to Dashboard |
+| **ROS Output** | `6002` | Forwards original JPEG frames to ROS/SLAM bridge |
 
-**SIDE 2 (Dashboard):**
+---
+
+## 16-Byte Packet Protocol (`protocol.py`)
+
+All packets use a simple, length-prefixed binary format in **big-endian (network byte order)**:
+
 ```text
-[DASHBOARD] Frame ID=152 | 640x480 | 30.0 FPS
-[DASHBOARD] Frame ID=153 | 640x480 | 30.0 FPS
+[4 bytes frame_id]     -> uint32 (">I")
+[8 bytes timestamp]    -> uint64 (">Q", integer milliseconds)
+[4 bytes payload_size] -> uint32 (">I")
+[JPEG payload bytes]   -> raw JPEG bytes
+```
+- **Total Header Size**: 16 bytes.
+- Zero serialization overhead (no JSON, no pickle, no dicts).
+- Zero server re-encoding: the server passes the exact incoming JPEG packet straight to connected clients.
+
+---
+
+## Directory Structure
+
+```text
+aerosar_video_distributor/
+├── server/
+│   └── video_server.py       # Central Laptop TCP Server
+├── clients/
+│   ├── dashboard_client.py   # Dashboard TCP Receiver
+│   └── ros_client.py         # ROS TCP Receiver & Bridge
+├── pi/
+│   ├── camera_source.py      # Hardware-agnostic Camera capture abstraction
+│   └── sender.py             # Raspberry Pi Camera Sender
+├── test/
+│   └── fake_sender.py        # Laptop synthetic video test sender
+├── protocol.py               # 16-byte length-prefixed packet protocol
+├── config.py                 # Central network and video settings
+├── requirements.txt          # Minimal dependencies
+└── README.md
 ```
 
-**SIDE 3 (ROS Bridge):**
-```text
-[ROS] Frame ID=152 | 640x480 | 30.0 FPS
-[ROS] Frame ID=153 | 640x480 | 30.0 FPS
+---
+
+## Progressive Testing Guide
+
+### TEST 1: Laptop Video Server + Fake Sender
+Verify that sender frames reach the server over TCP.
+
+**Terminal 1 (Server):**
+```bash
+python aerosar_video_distributor/server/video_server.py
+```
+**Terminal 2 (Fake Sender):**
+```bash
+python aerosar_video_distributor/test/fake_sender.py
+```
+*Expected Console Output:*
+- Server: `[SERVER] Pi connected`, `[SERVER] Frame 30 received`
+- Sender: `[FAKE SENDER] Connected to server at 127.0.0.1:5000`, `[FAKE SENDER] Sent frame 30`
+
+---
+
+### TEST 2: Server + Dashboard Receiver
+Verify that frames flow from server to the Dashboard preview.
+
+**Terminal 1 (Server):**
+```bash
+python aerosar_video_distributor/server/video_server.py
+```
+**Terminal 2 (Fake Sender):**
+```bash
+python aerosar_video_distributor/test/fake_sender.py
+```
+**Terminal 3 (Dashboard Receiver):**
+```bash
+python aerosar_video_distributor/clients/dashboard_client.py
+```
+*Expected Result:*
+- Window opens displaying animated video frames with frame counter and timestamp.
+- Console: `[DASHBOARD] Connected`, `[DASHBOARD] Frame 30 received`.
+
+---
+
+### TEST 3: Server + ROS Receiver
+Verify that frames flow from server to the ROS receiver integration point.
+
+**Terminal 1 (Server):**
+```bash
+python aerosar_video_distributor/server/video_server.py
+```
+**Terminal 2 (Fake Sender):**
+```bash
+python aerosar_video_distributor/test/fake_sender.py
+```
+**Terminal 3 (ROS Receiver):**
+```bash
+python aerosar_video_distributor/clients/ros_client.py
+```
+*Expected Result:*
+- Window opens displaying the ROS video stream.
+- Console: `[ROS] Connected`, `[ROS] Frame 30 received`.
+
+---
+
+### TEST 4: Run All Three Sides Simultaneously
+Verify full distribution pipeline with 1 sender and 2 receivers.
+
+**Option A - Automated Launcher:**
+```bash
+python run_all.py
 ```
 
-Press `Q` in any video window or `Ctrl+C` in any terminal to shut down cleanly.
+**Option B - Manual Terminals:**
+1. Start Server: `python aerosar_video_distributor/server/video_server.py`
+2. Start Dashboard: `python aerosar_video_distributor/clients/dashboard_client.py`
+3. Start ROS: `python aerosar_video_distributor/clients/ros_client.py`
+4. Start Sender: `python aerosar_video_distributor/test/fake_sender.py`
 
+---
+
+### TEST 5: Real Raspberry Pi Camera
+Deploy to actual Raspberry Pi hardware.
+
+1. On Raspberry Pi, configure `config.py` with your laptop's LAN IP:
+   ```python
+   LAPTOP_IP = "192.168.1.100"  # Replace with actual laptop IP
+   ```
+2. On Laptop, start Video Server:
+   ```bash
+   python aerosar_video_distributor/server/video_server.py
+   ```
+3. On Raspberry Pi, run sender:
+   ```bash
+   python aerosar_video_distributor/pi/sender.py --host 192.168.1.100
+   ```

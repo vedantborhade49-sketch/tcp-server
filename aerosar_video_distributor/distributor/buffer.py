@@ -38,7 +38,9 @@ if __name__ == "__main__":
     print("Pushing frame into buffer...")
     buf.push(test_header, test_payload)
 
-    header, payload = buf.wait_for_new_frame(timeout=0.5)
+    frame_data = buf.wait_for_new_frame(timeout=0.5)
+    assert frame_data is not None, "Failed to retrieve frame from buffer!"
+    header, payload = frame_data
     print(f"Retrieved Header : {header.decode()}")
     print(f"Retrieved Payload: {payload.decode()}")
     assert header == test_header and payload == test_payload, "Frame data mismatch!"

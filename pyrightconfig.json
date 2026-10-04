@@ -3,6 +3,7 @@
   "venv": "venv",
   "extraPaths": [
     "venv/Lib/site-packages",
-    "."
+    ".",
+    "aerosar_video_distributor"
   ]
 }

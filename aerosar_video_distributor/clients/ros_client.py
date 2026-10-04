@@ -1,65 +1,67 @@
 """
-AEROSAR - SIDE 3: Python ROS TCP Receiver & Bridge.
+AEROSAR - ROS Video Receiver (Client & Bridge)
 
-Flow:
-TCP connection
-  ↓
-receive packet
-  ↓
-decode JPEG
-  ↓
-OpenCV frame
-  ↓
-ROS integration layer (ROSImagePublisher)
-  ↓
-ROS image topic (/camera/image_raw)
-  ↓
-Existing ROS / SLAM system
+Connects to Laptop Video Server on TCP 6002.
+Pipeline:
+  receive_frame()
+        ↓
+  decode_frame()
+        ↓
+  ros_publish_frame()
+
+Does NOT modify SLAM.
+Provides a clean, modular integration point for ROS 1 / ROS 2 environments.
 """
 import sys
 import os
 import socket
 import time
-import cv2
+from typing import Optional, Tuple
 import numpy as np
+import cv2
 
+# Add parent directory to path to import protocol and config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import ROS_HOST, ROS_PORT
-from distributor.protocol import HEADER_SIZE, unpack_header
+from config import LAPTOP_IP, ROS_PORT
+from protocol import read_header, read_exact
 
 
-class ROSImagePublisher:
+# ==============================================================================
+# ROS Integration Point
+# ==============================================================================
+class ROSIntegration:
     """
-    ROS integration layer.
-    Bridges received OpenCV frames into the existing ROS/SLAM system via ROS image topics.
-    When ROS is not installed in the local environment (e.g. laptop development .venv),
-    gracefully falls back to standalone TCP receiver mode without error.
+    Modular ROS bridge.
+    Detects whether ROS 1 (rospy) or ROS 2 (rclpy) is available.
+    If neither is detected (e.g. running on Windows laptop .venv),
+    operates safely in standalone mode without raising errors.
     """
-    def __init__(self, topic_name="/camera/image_raw"):
-        self.topic_name = topic_name
-        self.ros_available = False
+    def __init__(self, topic: str = "/camera/image_raw"):
+        self.topic = topic
+        self.ros_type = None
         self.publisher = None
         self.bridge = None
+        self.node = None
         self._init_ros()
 
-    def _init_ros(self):
-        # 1. Attempt ROS 1 (rospy) integration
+    def _init_ros(self) -> None:
+        # Check for ROS 1 (rospy)
         try:
             import rospy  # type: ignore
             from sensor_msgs.msg import Image  # type: ignore
             from cv_bridge import CvBridge  # type: ignore
 
             if not rospy.core.is_initialized():
-                rospy.init_node("aerosar_video_bridge", anonymous=True)
+                rospy.init_node("aerosar_video_client", anonymous=True)
             self.bridge = CvBridge()
-            self.publisher = rospy.Publisher(self.topic_name, Image, queue_size=1)
-            self.ros_available = True
-            print(f"[ROS BRIDGE] Initialized ROS 1 node. Publishing to {self.topic_name}")
+            self.publisher = rospy.Publisher(self.topic, Image, queue_size=1)
+            self.ros_type = "ROS 1"
+            print(f"[ROS BRIDGE] Initialized ROS 1 node publishing to {self.topic}")
             return
-        except ImportError:
+        except (ImportError, ModuleNotFoundError):
             pass
 
-        # 2. Attempt ROS 2 (rclpy) next
+        # Check for ROS 2 (rclpy)
         try:
             import rclpy  # type: ignore
             from sensor_msgs.msg import Image  # type: ignore
@@ -67,104 +69,136 @@ class ROSImagePublisher:
 
             if not rclpy.ok():
                 rclpy.init()
-            self.node = rclpy.create_node("aerosar_video_bridge")
+            self.node = rclpy.create_node("aerosar_video_client")
             self.bridge = CvBridge()
-            self.publisher = self.node.create_publisher(Image, self.topic_name, 1)
-            self.ros_available = True
-            print(f"[ROS BRIDGE] Initialized ROS 2 node. Publishing to {self.topic_name}")
+            self.publisher = self.node.create_publisher(Image, self.topic, 1)
+            self.ros_type = "ROS 2"
+            print(f"[ROS BRIDGE] Initialized ROS 2 node publishing to {self.topic}")
             return
-        except ImportError:
+        except (ImportError, ModuleNotFoundError):
             pass
 
-        print(f"[ROS BRIDGE] Standalone mode (ROS/rospy not loaded in this environment). Ready for ROS integration.")
+        print("[ROS BRIDGE] Standalone mode (ROS not detected in current environment).")
+        print("[ROS BRIDGE] Frame is ready for SLAM/ROS in `ros_publish_frame()`.")
 
-    def publish_frame(self, cv_frame, frame_id, timestamp_ns):
-        """Passes the decoded frame to the ROS topic for consumption by existing ROS/SLAM."""
-        if not self.ros_available or self.publisher is None:
-            return
 
+_ros_integration: Optional[ROSIntegration] = None
+
+
+def ros_publish_frame(frame: np.ndarray, frame_id: int, timestamp: int) -> None:
+    """
+    Clean ROS integration hook.
+    Connect your SLAM / ROS image pipeline here.
+    """
+    global _ros_integration
+    if _ros_integration is None:
+        _ros_integration = ROSIntegration()
+
+    if _ros_integration.ros_type == "ROS 1" and _ros_integration.publisher and _ros_integration.bridge:
         try:
-            img_msg = self.bridge.cv2_to_imgmsg(cv_frame, encoding="bgr8")
-            if hasattr(img_msg, 'header'):
-                img_msg.header.seq = frame_id
-                img_msg.header.stamp.secs = int(timestamp_ns // 1_000_000_000)
-                img_msg.header.stamp.nsecs = int(timestamp_ns % 1_000_000_000)
-                img_msg.header.frame_id = "camera_link"
-            self.publisher.publish(img_msg)
+            msg = _ros_integration.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+            if hasattr(msg, "header"):
+                msg.header.seq = frame_id
+                # Handle timestamp in seconds/nanoseconds
+                if timestamp > 1_000_000_000_000_000:  # nanoseconds
+                    msg.header.stamp.secs = int(timestamp // 1_000_000_000)
+                    msg.header.stamp.nsecs = int(timestamp % 1_000_000_000)
+                else:  # milliseconds
+                    msg.header.stamp.secs = int(timestamp // 1000)
+                    msg.header.stamp.nsecs = int((timestamp % 1000) * 1_000_000)
+                msg.header.frame_id = "camera_link"
+            _ros_integration.publisher.publish(msg)
         except Exception as e:
-            print(f"[ROS BRIDGE] Error publishing frame to ROS: {e}")
+            print(f"[ROS] Publish error: {e}")
+
+    elif _ros_integration.ros_type == "ROS 2" and _ros_integration.publisher and _ros_integration.bridge:
+        try:
+            msg = _ros_integration.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+            _ros_integration.publisher.publish(msg)
+        except Exception as e:
+            print(f"[ROS] Publish error: {e}")
 
 
-def receive_exact(sock, size):
-    data = bytearray()
-    while len(data) < size:
-        packet = sock.recv(size - len(data))
-        if not packet:
-            raise ConnectionError("Connection closed")
-        data.extend(packet)
-    return bytes(data)
+# ==============================================================================
+# Network Pipeline: receive -> decode -> publish
+# ==============================================================================
+def receive_frame(sock: socket.socket) -> Tuple[int, int, bytes]:
+    """Receives 16-byte header and exact JPEG payload."""
+    frame_id, timestamp, payload_size = read_header(sock)
+    jpeg_bytes = read_exact(sock, payload_size)
+    return frame_id, timestamp, jpeg_bytes
 
 
-def run():
-    print(f"[ROS] Starting TCP Receiver connecting to {ROS_HOST}:{ROS_PORT}...")
-    ros_bridge = ROSImagePublisher(topic_name="/camera/image_raw")
+def decode_frame(jpeg_bytes: bytes) -> Optional[np.ndarray]:
+    """Decodes JPEG byte array into an OpenCV BGR frame."""
+    frame_data = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+    return cv2.imdecode(frame_data, cv2.IMREAD_COLOR)
+
+
+def run(host: str = LAPTOP_IP, port: int = ROS_PORT) -> None:
+    """Main receiver loop connecting to the Video Server."""
+    print(f"[ROS] Starting TCP Receiver connecting to {host}:{port}...")
+
+    # Initialize ROS bridge
+    global _ros_integration
+    _ros_integration = ROSIntegration()
+
+    sock: Optional[socket.socket] = None
 
     while True:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.connect((ROS_HOST, ROS_PORT))
-            print(f"[ROS] Connected to {ROS_HOST}:{ROS_PORT}")
-        except Exception as e:
-            print(f"[ROS] Waiting for distributor at {ROS_HOST}:{ROS_PORT}... ({e})")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.connect((host, port))
+            print("[ROS] Connected")
+        except Exception:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                sock = None
             time.sleep(1.0)
             continue
 
-        frames_received = 0
-        start_time = time.time()
+        frame_counter = 0
 
         try:
             while True:
-                # 1. Receive standard protocol header
-                header_bytes = receive_exact(sock, HEADER_SIZE)
-                frame_id, timestamp_ns, payload_size, width, height = unpack_header(header_bytes)
+                # 1. Receive
+                frame_id, timestamp, jpeg_bytes = receive_frame(sock)
 
-                # 2. Receive JPEG payload
-                payload_bytes = receive_exact(sock, payload_size)
-
-                # 3. Decode JPEG to OpenCV frame
-                frame_data = np.frombuffer(payload_bytes, dtype=np.uint8)
-                frame = cv2.imdecode(frame_data, cv2.IMREAD_COLOR)
-
+                # 2. Decode
+                frame = decode_frame(jpeg_bytes)
                 if frame is None:
                     continue
 
-                # 4. Pass frame to ROS integration layer for existing ROS/SLAM
-                ros_bridge.publish_frame(frame, frame_id, timestamp_ns)
+                # 3. Publish to ROS
+                ros_publish_frame(frame, frame_id, timestamp)
 
-                frames_received += 1
-                elapsed = time.time() - start_time
-                fps = frames_received / elapsed if elapsed > 0 else 0
+                frame_counter += 1
+                if frame_counter % 30 == 0:
+                    print(f"[ROS] Frame {frame_id} received")
 
-                print(f"[ROS] Frame ID={frame_id} | {width}x{height} | {fps:.1f} FPS")
-
-                # 5. Display visual preview
-                cv2.putText(frame, f"ROS Frame ID: {frame_id}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.putText(frame, f"FPS: {fps:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                # Visual preview
                 cv2.imshow("AEROSAR - ROS Receiver", frame)
-
                 if cv2.waitKey(1) & 0xFF in [ord('q'), ord('Q')]:
-                    print("[ROS] Shutdown requested by user.")
+                    print("[ROS] Quit requested by user.")
                     return
-        except Exception as e:
-            print(f"[ROS] Disconnected: {e}. Reconnecting in 1s...")
-            time.sleep(1.0)
+
+        except (ConnectionError, socket.error):
+            print("[ROS] Disconnected from server. Reconnecting in 1s...")
         finally:
-            try:
-                sock.close()
-            except Exception:
-                pass
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                sock = None
             cv2.destroyAllWindows()
+            time.sleep(1.0)
 
 
 if __name__ == "__main__":
-    run()
+    target_host = sys.argv[1] if len(sys.argv) > 1 else LAPTOP_IP
+    run(host=target_host)
