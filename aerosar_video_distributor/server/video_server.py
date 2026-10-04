@@ -15,6 +15,9 @@ class VideoServer:
         
     def run(self):
         print(f"[SERVER] Listening on {SERVER_HOST}:{PI_PORT}")
+        print(f"[SERVER] Waiting for Raspberry Pi/video sender...")
+        print(f"[SERVER] Dashboard waiting on port {DASHBOARD_PORT}")
+        print(f"[SERVER] ROS waiting on port {ROS_PORT}")
         
         # Start Dashboard and ROS servers
         threading.Thread(target=self.serve_client, args=(DASHBOARD_PORT, "Dashboard"), daemon=True).start()
@@ -32,7 +35,7 @@ class VideoServer:
         while True:
             try:
                 conn, addr = server_sock.accept()
-                print(f"[SERVER] Pi connected")
+                print(f"[SERVER] Raspberry Pi/video sender connected")
                 self.handle_pi(conn)
             except Exception as e:
                 time.sleep(1)
@@ -56,6 +59,10 @@ class VideoServer:
         except Exception:
             pass
         finally:
+            with self.packet_lock:
+                self.latest_packet = None
+            print("[SERVER] Raspberry Pi/video sender disconnected")
+            print(f"[SERVER] Waiting for Raspberry Pi/video sender...")
             conn.close()
 
     def serve_client(self, port: int, client_name: str):
@@ -69,6 +76,8 @@ class VideoServer:
                 conn, addr = server_sock.accept()
                 print(f"[SERVER] {client_name} connected")
                 self.handle_client(conn, client_name)
+                print(f"[SERVER] {client_name} disconnected")
+                print(f"[SERVER] {client_name} waiting on port {port}")
             except Exception:
                 time.sleep(1)
 

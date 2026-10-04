@@ -1,8 +1,8 @@
 """
-AEROSAR - Master 3-Side Test Launcher
+AEROSAR - Master 3-Side Production Launcher
 
 Launches the complete three-side architecture simultaneously in dedicated console windows:
-  SIDE 1: Main Sender + Video Distributor (run_test.py)
+  SIDE 1: Video Distributor (server/video_server.py)
   SIDE 2: Dashboard TCP Receiver (clients/dashboard_client.py)
   SIDE 3: ROS TCP Receiver (clients/ros_client.py)
 """
@@ -20,15 +20,15 @@ def main():
     if os.path.exists(venv_py):
         python_exe = venv_py
 
-    side1_script = os.path.join(root_dir, "run_test.py")
+    side1_script = os.path.join(root_dir, "aerosar_video_distributor", "server", "video_server.py")
     side2_script = os.path.join(root_dir, "aerosar_video_distributor", "clients", "dashboard_client.py")
     side3_script = os.path.join(root_dir, "aerosar_video_distributor", "clients", "ros_client.py")
 
     print("==================================================================")
-    print("       AEROSAR - Master Test Launcher (All 3 Sides)               ")
+    print("       AEROSAR - Master Production Launcher (Laptop Sides)        ")
     print("==================================================================")
     print(f"[*] Python Interpreter : {python_exe}")
-    print(f"[*] Launching Side 1   : Main Sender + Distributor")
+    print(f"[*] Launching Side 1   : Video Distributor")
     print(f"[*] Launching Side 2   : Dashboard TCP Receiver")
     print(f"[*] Launching Side 3   : ROS TCP Receiver")
     print("==================================================================")
@@ -36,7 +36,7 @@ def main():
     # Windows flag to spawn each process in its own separate command window
     creation_flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
 
-    # 1. Launch Side 1 (Distributor Server + Webcam Sender)
+    # 1. Launch Side 1 (Distributor Server)
     side1_proc = subprocess.Popen([python_exe, side1_script], creationflags=creation_flags)
     print("[+] Side 1 started in a new console window.")
 
