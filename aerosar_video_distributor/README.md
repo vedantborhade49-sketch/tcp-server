@@ -56,4 +56,38 @@ Run the test sender from the project root with:
 python test/test_sender.py
 ```
 
-*Note: STAGE 4 will implement the actual distributor receiver, so at this stage you will see "Connection Refused" messages from the sender as it waits for the server to come online.*
+*Note: STAGE 4 is now implemented! See below for the end-to-end testing procedure.*
+
+## How to Run the STAGE 4 Receiver Test
+
+For STAGE 4, we have implemented the central video distributor receiver. To test the connection:
+
+**Terminal 1 (Start the Server):**
+```bash
+python distributor/server.py
+```
+
+**Terminal 2 (Start the Sender):**
+```bash
+python test/test_sender.py
+```
+
+**Expected result:**
+
+Terminal 1 should log the incoming connection and frames:
+```text
+[SERVER] Starting...
+[SERVER] Listening on 127.0.0.1:8000
+[CLIENT] Connected: ('127.0.0.1', 54321)
+[FRAME] ID=1 | 640x480 | 28.4 FPS | 35.2 ms
+[FRAME] ID=2 | 640x480 | 29.1 FPS | 34.8 ms
+[FRAME] ID=3 | 640x480 | 29.8 FPS | 36.1 ms
+...
+```
+
+An OpenCV window named `AEROSAR - Received Video` should open and display the live webcam stream received through TCP, complete with overlaid telemetry metrics (Frame ID, FPS, Resolution, and Latency).
+
+This proves the following data flow:
+Camera → JPEG encoding → TCP → Distributor → JPEG decoding → OpenCV frame
+
+(Press `Q` in the OpenCV window to cleanly shut down the receiver)
