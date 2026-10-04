@@ -83,10 +83,21 @@ class VideoServer:
 
     def handle_client(self, conn: socket.socket, client_name: str):
         import protocol
+        import select
         last_sent_frame_id = -1
         frames_sent = 0
         try:
             while True:
+                # Check if client has disconnected (socket becomes readable on close)
+                readable, _, _ = select.select([conn], [], [], 0.0)
+                if readable:
+                    try:
+                        data = conn.recv(1024)
+                        if not data:
+                            break  # Clean disconnect
+                    except (ConnectionResetError, ConnectionAbortedError, ConnectionError, BrokenPipeError):
+                        break  # Forceful disconnect
+                
                 packet = None
                 with self.packet_lock:
                     if self.latest_packet and self.latest_packet[0] > last_sent_frame_id:
@@ -103,7 +114,7 @@ class VideoServer:
                     if frames_sent % 30 == 0:
                         print(f"[SERVER] Frame {frame_id} → {client_name}")
                 else:
-                    time.sleep(0.001) # Prevent tight loop
+                    time.sleep(0.01) # Prevent tight loop
         except Exception:
             pass
         finally:
