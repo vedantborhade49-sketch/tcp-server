@@ -58,36 +58,62 @@ python test/test_sender.py
 
 *Note: STAGE 4 is now implemented! See below for the end-to-end testing procedure.*
 
-## How to Run the STAGE 4 Receiver Test
+## Configuration (`config.py`)
 
-For STAGE 4, we have implemented the central video distributor receiver. To test the connection:
+All communication ports are fully configurable in `config.py`:
+- `VIDEO_HOST = "0.0.0.0"` / `VIDEO_PORT = 5000` (Camera TCP ingestion)
+- `DASHBOARD_HOST = "127.0.0.1"` / `DASHBOARD_PORT = 6001` (Dashboard TCP stream)
+- `ROS_HOST = "127.0.0.1"` / `ROS_PORT = 6002` (ROS TCP bridge stream)
 
-**Terminal 1 (Start the Server):**
-```bash
-python distributor/server.py
+---
+
+## How to Run the STAGE 5 Three-Side Test
+
+Ensure your virtual environment (`.venv` or `venv`) is activated in each terminal:
+```powershell
+.\venv\Scripts\Activate.ps1
 ```
 
-**Terminal 2 (Start the Sender):**
+### SIDE 1: Main Sender + Central Video Distributor
+Run the combined launcher from the project directory:
 ```bash
-python test/test_sender.py
+python run_test.py
 ```
+*(From workspace root: `python run_test.py` or `python aerosar_video_distributor/run_test.py`)*
 
-**Expected result:**
+This starts `distributor/server.py` and `test/test_sender.py` concurrently.
 
-Terminal 1 should log the incoming connection and frames:
+### SIDE 2: Dashboard TCP Receiver
+In a second terminal:
+```bash
+python clients/dashboard_client.py
+```
+*(From workspace root: `python aerosar_video_distributor/clients/dashboard_client.py`)*
+
+### SIDE 3: ROS TCP Receiver & Bridge
+In a third terminal:
+```bash
+python clients/ros_client.py
+```
+*(From workspace root: `python aerosar_video_distributor/clients/ros_client.py`)*
+
+---
+
+## Expected Output & Verification
+
+Both receivers receive identical frames and print matching Frame IDs:
+
+**SIDE 2 (Dashboard):**
 ```text
-[SERVER] Starting...
-[SERVER] Listening on 127.0.0.1:8000
-[CLIENT] Connected: ('127.0.0.1', 54321)
-[FRAME] ID=1 | 640x480 | 28.4 FPS | 35.2 ms
-[FRAME] ID=2 | 640x480 | 29.1 FPS | 34.8 ms
-[FRAME] ID=3 | 640x480 | 29.8 FPS | 36.1 ms
-...
+[DASHBOARD] Frame ID=152 | 640x480 | 30.0 FPS
+[DASHBOARD] Frame ID=153 | 640x480 | 30.0 FPS
 ```
 
-An OpenCV window named `AEROSAR - Received Video` should open and display the live webcam stream received through TCP, complete with overlaid telemetry metrics (Frame ID, FPS, Resolution, and Latency).
+**SIDE 3 (ROS Bridge):**
+```text
+[ROS] Frame ID=152 | 640x480 | 30.0 FPS
+[ROS] Frame ID=153 | 640x480 | 30.0 FPS
+```
 
-This proves the following data flow:
-Camera → JPEG encoding → TCP → Distributor → JPEG decoding → OpenCV frame
+Press `Q` in any video window or `Ctrl+C` in any terminal to shut down cleanly.
 
-(Press `Q` in the OpenCV window to cleanly shut down the receiver)

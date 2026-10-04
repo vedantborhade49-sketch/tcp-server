@@ -12,10 +12,13 @@ import os
 # Add parent directory to path so we can import from distributor and config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import HOST, PORT, JPEG_QUALITY
+from config import VIDEO_HOST, VIDEO_PORT, SENDER_CONNECT_HOST, JPEG_QUALITY
 from distributor.protocol import pack_header
 
 def main():
+    target_host = SENDER_CONNECT_HOST if VIDEO_HOST == "0.0.0.0" else VIDEO_HOST
+    target_port = VIDEO_PORT
+
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: Could not open webcam.")
@@ -28,7 +31,7 @@ def main():
 
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
 
-    print(f"Attempting to connect to distributor at {HOST}:{PORT}")
+    print(f"Attempting to connect to distributor at {target_host}:{target_port}")
     
     fps_start_time = time.time()
     fps_frame_count = 0
@@ -59,11 +62,11 @@ def main():
                     sock.close()
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.connect((HOST, PORT))
+                    sock.connect((target_host, target_port))
                     connected = True
-                    print(f"Successfully connected to the distributor at {HOST}:{PORT}!")
+                    print(f"Successfully connected to the distributor at {target_host}:{target_port}!")
                 except ConnectionRefusedError:
-                    print(f"Connection error: Distributor at {HOST}:{PORT} is not running. Retrying...")
+                    print(f"Connection error: Distributor at {target_host}:{target_port} is not running. Retrying...")
                     sock = None
                 except Exception as e:
                     print(f"Connection error: {e}. Retrying...")
