@@ -1,11 +1,13 @@
-SERVER_HOST = "0.0.0.0"
-LAPTOP_IP = "127.0.0.1" # Change this to the laptop's actual IP on the Pi
+SERVER_HOST = "192.168.1.100"  # Replace with actual laptop IP
+SERVER_PORT = 5000
 
+LAPTOP_IP = SERVER_HOST # Kept for backward compatibility with clients
 PI_PORT = 5000
 DASHBOARD_PORT = 6001
 ROS_PORT = 6002
 
-JPEG_QUALITY = 75
+JPEG_QUALITY = 80
+FPS = 15
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 FRAME_TIMEOUT = 2.0

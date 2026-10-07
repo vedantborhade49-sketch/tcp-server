@@ -10,7 +10,7 @@ class CameraSource:
         self.camera_index = camera_index
         self.cap = None
 
-    def open(self):
+    def start(self):
         self.cap = cv2.VideoCapture(self.camera_index)
         if not self.cap.isOpened():
             return False
@@ -24,7 +24,7 @@ class CameraSource:
             return False, None
         return self.cap.read()
         
-    def release(self):
+    def stop(self):
         if self.cap:
             self.cap.release()
             self.cap = None
