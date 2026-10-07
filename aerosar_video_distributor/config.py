@@ -1,10 +1,11 @@
-SERVER_HOST = "192.168.1.100"  # Replace with actual laptop IP
-SERVER_PORT = 5000
-
-LAPTOP_IP = SERVER_HOST # Kept for backward compatibility with clients
+HOST = "0.0.0.0"
+LAPTOP_IP = "127.0.0.1"  # For local testing clients
 PI_PORT = 5000
 DASHBOARD_PORT = 6001
 ROS_PORT = 6002
+
+MAX_FRAME_SIZE = 5 * 1024 * 1024 # 5 MB
+STATUS_INTERVAL = 5 # seconds
 
 CAMERA_INDEX = 0
 JPEG_QUALITY = 80

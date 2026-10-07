@@ -44,7 +44,7 @@ def run_dashboard_client():
                 current_time = time.time()
                 
                 if packet_data:
-                    frame_id, timestamp, jpeg_bytes = packet_data
+                    frame_id, timestamp, jpeg_bytes, raw_packet = packet_data
                     frames_received += 1
                     last_frame_time = current_time
                     camera_online = True
